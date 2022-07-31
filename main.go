@@ -60,6 +60,7 @@ type Measure struct {
 	S3xx        int
 	S4xx        int
 	S5xx        int
+	S499        int
 
 	TotalBytes int
 	MinBytes   int
@@ -136,6 +137,7 @@ func buildColumns() {
 		columns = append(columns, &Column{Name: "3xx"})
 		columns = append(columns, &Column{Name: "4xx"})
 		columns = append(columns, &Column{Name: "5xx"})
+		columns = append(columns, &Column{Name: "499"})
 	}
 	if config.ShowBytes {
 		columns = append(columns, &Column{Name: "TotalBytes"})
@@ -174,6 +176,7 @@ func showMeasures(measures []*Measure) {
 	s3xxWidth := MIN_STATUS_WIDTH
 	s4xxWidth := MIN_STATUS_WIDTH
 	s5xxWidth := MIN_STATUS_WIDTH
+	s499Width := MIN_STATUS_WIDTH
 	totalBytesWidth := 10
 	bytesWidth := 9 // for title
 
@@ -215,6 +218,10 @@ func showMeasures(measures []*Measure) {
 		if s5xxWidth < w {
 			s5xxWidth = w
 		}
+		w = getIntegerDigitWidth(float64(measures[i].S499))
+		if s499Width < w {
+			s5xxWidth = w
+		}
 		w = getIntegerDigitWidth(float64(measures[i].TotalBytes))
 		if totalBytesWidth < w {
 			totalBytesWidth = w
@@ -252,6 +259,9 @@ func showMeasures(measures []*Measure) {
 		case "5xx":
 			fmt.Printf(fmt.Sprintf("%%%ds  ", s5xxWidth), column.Name)
 			formats = append(formats, fmt.Sprintf("%%%dd  ", s5xxWidth))
+		case "499":
+			fmt.Printf(fmt.Sprintf("%%%ds  ", s499Width), column.Name)
+			formats = append(formats, fmt.Sprintf("%%%dd  ", s499Width))
 		case "TotalBytes":
 			fmt.Printf(fmt.Sprintf("%%%ds  ", totalBytesWidth), column.Name)
 			formats = append(formats, fmt.Sprintf("%%%dd  ", totalBytesWidth))
@@ -302,6 +312,8 @@ func showMeasures(measures []*Measure) {
 			c++
 			fmt.Printf(formats[c], m.S5xx)
 			c++
+			fmt.Printf(formats[c], m.S499)
+			c++
 		}
 		if config.ShowBytes {
 			fmt.Printf(formats[c], m.TotalBytes)
@@ -337,6 +349,7 @@ func showTop(allTimes []*Time) {
 var configFile string
 var config tomlConfig
 var modeGenerate bool
+var mode499 bool
 
 func init() {
 	const (
@@ -346,6 +359,7 @@ func init() {
 	flag.StringVar(&configFile, "conf", defaultConfigFile, usage)
 	flag.StringVar(&configFile, "f", defaultConfigFile, usage+" (shorthand)")
 	flag.BoolVar(&modeGenerate, "generate", false, "generate "+usage)
+	flag.BoolVar(&mode499, "499", false, "reduce status code 499")
 	flag.Parse()
 }
 
@@ -428,15 +442,17 @@ func main() {
 
 	go func() {
 		for time := range ch {
-			totals[time.Url] += time.Time
-			times[time.Url] = append(times[time.Url], time.Time)
-			allTimes = append(allTimes, time)
-			totalBytes[time.Url] += time.Byte
-			bytes[time.Url] = append(bytes[time.Url], time.Byte)
 			if statusCode[time.Url] == nil {
-				statusCode[time.Url] = make([]int, 6)
+				statusCode[time.Url] = make([]int, 7)
 			}
 			statusCode[time.Url][time.StatusCode]++
+			if time.StatusCode <= 5 || !mode499 {
+				totals[time.Url] += time.Time
+				times[time.Url] = append(times[time.Url], time.Time)
+				allTimes = append(allTimes, time)
+				totalBytes[time.Url] += time.Byte
+				bytes[time.Url] = append(bytes[time.Url], time.Byte)
+			}
 		}
 		for url, total := range totals {
 			mean := total / float64(len(times[url]))
@@ -472,15 +488,21 @@ func main() {
 					for _, replace := range urlReplaceRegexps {
 						url = replace.compiledRegexp.ReplaceAllString(url, replace.replace)
 					}
-					time, err := strconv.ParseFloat(s[config.DurationIndex], 10)
+					time, err := strconv.ParseFloat(s[config.DurationIndex], 64)
 					if err == nil {
 						time = time * scale
 					} else {
 						time = 0.000
 					}
-					statusCode, err := strconv.Atoi(string(s[config.StatusIndex][0]))
-					if err != nil {
-						statusCode = 0
+					var statusCode = 0
+					sc := s[config.StatusIndex]
+					if sc == "499" {
+						statusCode = 6
+					} else {
+						statusCode, err = strconv.Atoi(string(sc[0]))
+						if err != nil {
+							statusCode = 0
+						}
 					}
 					bytes, err := strconv.Atoi(s[config.BytesIndex])
 					if err != nil {
@@ -528,6 +550,7 @@ func main() {
 			S3xx:        statusCode[url][3],
 			S4xx:        statusCode[url][4],
 			S5xx:        statusCode[url][5],
+			S499:        statusCode[url][6],
 			TotalBytes:  totalBytes[url],
 			MinBytes:    sortedBytes[0],
 			MeanBytes:   totalBytes[url] / count,
